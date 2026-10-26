@@ -1,49 +1,45 @@
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Check, ChefHat, Coffee, Minus, Plus, Printer, ReceiptText, ShoppingBag, Trash2, UtensilsCrossed } from 'lucide-react';
 
-import { useEffect, useState } from "react";
-
-type MenuItem = {
-  id: number;
-  name: string;
-  price: number;
-};
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+type Product = {id:number;name:string;price:number;category:string;emoji:string;description:string};
+type Order = {id:number;token:string;status:string;payment_method:'cash'|'upi';payment_status:string;total:number;created_at:string;items:{product_id:number;name:string;unit_price:number;quantity:number}[]};
+type Screen = 'kiosk'|'receipt'|'kitchen';
+const money=(n:number)=>`₹${n.toLocaleString('en-IN')}`;
+async function request<T>(path:string, init?:RequestInit):Promise<T> {
+  const response = await fetch(`${API}${path}`, {headers:{'Content-Type':'application/json'},...init});
+  if (!response.ok) throw new Error((await response.text()) || 'Request failed');
+  return response.json() as Promise<T>;
+}
 
 export default function App() {
-  const [menu, setMenu] = useState<MenuItem[]>([]);
-  const [cart, setCart] = useState<MenuItem[]>([]);
-
-  useEffect(() => {
-    fetch("http://localhost:8000/menu")
-      .then((res) => {
-        if (!res.ok) throw new Error("API unavailable");
-        return res.json();
-      })
-      .then(setMenu)
-      .catch(console.error);
-  }, []);
-
-  const total = cart.reduce(
-    (sum, item) => sum + item.price, 0
-  );
-
-  return (
-    <main style={{ padding: 32, fontFamily: "Arial" }}>
-      <h1>CafeFlow ☕</h1>
-      <p>Self-service café ordering demo</p>
-
-      <h2>Menu</h2>
-      {menu.map((item) => (
-        <div key={item.id} style={{ margin: 12 }}>
-          {item.name} — ₹{item.price}
-          <button onClick={() => setCart([...cart, item])}>
-            Add
-          </button>
-        </div>
-      ))}
-
-      <h2>Your cart</h2>
-      <p>{cart.length} items</p>
-      <h3>Total: ₹{total}</h3>
-      <button onClick={() => setCart([])}>Clear cart</button>
-    </main>
-  );
+  const [screen,setScreen]=useState<Screen>('kiosk');
+  const [menu,setMenu]=useState<Product[]>([]);
+  const [cart,setCart]=useState<Record<number,number>>({});
+  const [category,setCategory]=useState('All');
+  const [payment,setPayment]=useState<'cash'|'upi'>('cash');
+  const [lastOrder,setLastOrder]=useState<Order|null>(null);
+  const [orders,setOrders]=useState<Order[]>([]);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  useEffect(()=>{request<Product[]>('/menu').then(setMenu).catch(()=>setError('Cannot reach API. Start FastAPI on port 8000.'));},[]);
+  const categories=['All',...new Set(menu.map(item=>item.category))];
+  const lines=useMemo(()=>menu.filter(p=>cart[p.id]>0).map(p=>({...p,quantity:cart[p.id]})),[menu,cart]);
+  const total=lines.reduce((sum,line)=>sum+line.price*line.quantity,0);
+  const count=lines.reduce((sum,line)=>sum+line.quantity,0);
+  function change(id:number,delta:number){setCart(prev=>{const next={...prev};next[id]=Math.max(0,(next[id]||0)+delta);if(!next[id])delete next[id];return next;});}
+  async function checkout(){if(!lines.length||busy)return;setBusy(true);setError('');try{
+    const order=await request<Order>('/orders',{method:'POST',body:JSON.stringify({items:lines.map(l=>({product_id:l.id,quantity:l.quantity})),payment_method:payment})});
+    setLastOrder(order);setCart({});setScreen('receipt');
+  }catch(e){setError(`Order failed: ${e instanceof Error?e.message:'unknown error'}`);}finally{setBusy(false);}}
+  async function refreshOrders(){try{setOrders(await request<Order[]>('/orders'));setError('');}catch{setError('Cannot load kitchen orders.');}}
+  useEffect(()=>{if(screen!=='kitchen')return;void refreshOrders();const timer=window.setInterval(()=>void refreshOrders(),5000);return()=>window.clearInterval(timer);},[screen]);
+  async function setStatus(id:number,status:string){try{await request(`/orders/${id}/status`,{method:'PATCH',body:JSON.stringify({status})});await refreshOrders();}catch{setError('Could not update order.');}}
+  return <div className="shell">
+    <header className="topbar no-print"><div className="brand"><div className="brand-icon"><Coffee size={24}/></div><div><strong>CafeFlow<span>.</span></strong><small>smart café ordering</small></div></div><nav><button className={screen!=='kitchen'?'nav active':'nav'} onClick={()=>setScreen('kiosk')}><ShoppingBag size={17}/> Customer kiosk</button><button className={screen==='kitchen'?'nav active':'nav'} onClick={()=>setScreen('kitchen')}><ChefHat size={17}/> Kitchen board</button></nav></header>
+    {error&&<div className="error no-print">{error}</div>}
+    {screen==='kiosk'&&<main className="layout no-print"><section className="menu-area"><div className="hero"><div><div className="eyebrow">FRESHLY MADE · CAMPUS CAFÉ</div><h1>Good food.<br/><em>Great breaks.</em></h1><p>Skip the queue. Pick your favourites and place your order.</p></div><div className="hero-illustration">☕</div></div><div className="section-heading"><div><p className="eyebrow">DISCOVER THE MENU</p><h2>What are you craving?</h2></div><span>{menu.length} delicious options</span></div><div className="categories">{categories.map(c=><button key={c} className={c===category?'cat selected':'cat'} onClick={()=>setCategory(c)}>{c}</button>)}</div><div className="menu-grid">{menu.filter(p=>category==='All'||p.category===category).map(p=><article className="product" key={p.id}><div className="food-icon">{p.emoji}</div><div className="product-content"><span className="item-category">{p.category}</span><h3>{p.name}</h3><p>{p.description}</p><div className="product-bottom"><strong>{money(p.price)}</strong><button aria-label={`Add ${p.name}`} onClick={()=>change(p.id,1)}><Plus size={19}/></button></div></div></article>)}</div></section><aside className="cart"><div className="cart-head"><div><p className="eyebrow">YOUR ORDER</p><h2>My tray <span>({count})</span></h2></div><ShoppingBag size={23}/></div>{!lines.length?<div className="empty"><UtensilsCrossed size={40}/><h3>Your tray is empty</h3><p>Choose something tasty to get started.</p></div>:<div className="cart-lines">{lines.map(l=><div className="cart-item" key={l.id}><div className="cart-emoji">{l.emoji}</div><div className="cart-info"><strong>{l.name}</strong><small>{money(l.price)} each</small><div className="quantity"><button onClick={()=>change(l.id,-1)}><Minus size={14}/></button><span>{l.quantity}</span><button onClick={()=>change(l.id,1)}><Plus size={14}/></button></div></div><strong>{money(l.price*l.quantity)}</strong></div>)}</div>}<div className="cart-footer"><div className="summary-row"><span>Subtotal</span><strong>{money(total)}</strong></div><div className="summary-row total"><span>Total</span><strong>{money(total)}</strong></div><div className="payment-label">PAY AT COUNTER · DEMO</div><div className="pay-options"><button className={payment==='cash'?'chosen':''} onClick={()=>setPayment('cash')}>Cash</button><button className={payment==='upi'?'chosen':''} onClick={()=>setPayment('upi')}>UPI (unverified)</button></div><button className="checkout" disabled={busy||!lines.length} onClick={checkout}>{busy?'Placing order…':`Place order · ${money(total)}`} <Check size={18}/></button><p className="disclaimer">No payment is collected or verified in this demo.</p></div></aside></main>}
+    {screen==='receipt'&&lastOrder&&<div className="receipt-screen"><div className="receipt-actions no-print"><button className="back-btn" onClick={()=>setScreen('kiosk')}><ArrowLeft size={18}/> New order</button><button className="print-btn" onClick={()=>window.print()}><Printer size={18}/> Print receipt</button></div><div className="receipt-paper"><div className="receipt-top"><Coffee size={29}/><h2>CAFEFLOW</h2><p>ORDER TOKEN</p></div><div className="token">{lastOrder.token}</div><div className="receipt-line"><span>Order time</span><span>{new Date(lastOrder.created_at).toLocaleString('en-IN')}</span></div><div className="receipt-line"><span>Payment choice</span><span>{lastOrder.payment_method.toUpperCase()}</span></div><div className="receipt-line"><span>Payment status</span><strong>NOT VERIFIED</strong></div><hr/>{lastOrder.items.map((item,i)=><div className="receipt-line" key={i}><span>{item.quantity} × {item.name}</span><strong>{money(item.quantity*item.unit_price)}</strong></div>)}<hr/><div className="receipt-line receipt-total"><strong>TOTAL</strong><strong>{money(lastOrder.total)}</strong></div><p className="receipt-note">Please pay at the counter and keep this token. Not a tax invoice or payment confirmation.</p><p className="receipt-thanks">Thank you for ordering ☕</p></div></div>}
+    {screen==='kitchen'&&<main className="kitchen no-print"><div className="kitchen-title"><div><p className="eyebrow">LIVE OPERATIONS · DEMO</p><h1><ChefHat size={32}/> Kitchen display</h1><p>New orders refresh every five seconds.</p></div><button className="refresh" onClick={()=>void refreshOrders()}>Refresh orders</button></div><div className="kitchen-grid">{orders.length===0?<div className="empty kitchen-empty"><ReceiptText size={36}/><h3>No orders yet</h3><p>Place an order from the customer kiosk.</p></div>:orders.map(o=><div className="order-card" key={o.id}><div className="order-header"><strong>{o.token}</strong><span className={`status status-${o.status}`}>{o.status}</span></div><small>{new Date(o.created_at).toLocaleString('en-IN')} · {o.payment_method.toUpperCase()} (unverified)</small><div className="order-lines">{o.items.map((it,i)=><div key={i}><strong>{it.quantity}×</strong> {it.name}</div>)}</div><div className="order-bottom"><strong>{money(o.total)}</strong><select aria-label={`Change status of ${o.token}`} value={o.status} onChange={e=>void setStatus(o.id,e.target.value)}>{['new','preparing','ready','completed','cancelled'].map(s=><option key={s} value={s}>{s}</option>)}</select></div></div>)}</div><p className="kitchen-warning">Development version: kitchen dashboard is not authenticated. Never expose this directly to the public internet.</p></main>}
+  </div>;
 }
